@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html lang="lv">
+<head>
+<meta charset="UTF-8">
+<title>Brikešu pakošanas līnijas simulācija</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header>
+  <h1>Brikešu pakošanas līnijas simulācija</h1>
+  <span class="subtitle">v0.2 · pilns izkārtojums · 4 preses · SIA „Avoti SWF"</span>
+</header>
+
+<main>
+  <div class="canvas-wrap">
+    <canvas id="stage"></canvas>
+  </div>
+
+  <aside class="panel">
+    <h2>Prešu vadība</h2>
+
+    <div class="control-row">
+      <label>Prese 1 <span class="value" id="cycleVal1">7.2 s</span></label>
+      <input type="range" id="cycleSlider1" min="1.8" max="7.2" step="0.1" value="7.2">
+    </div>
+    <div class="control-row">
+      <label>Prese 2 <span class="value" id="cycleVal2">7.2 s</span></label>
+      <input type="range" id="cycleSlider2" min="1.8" max="7.2" step="0.1" value="7.2">
+    </div>
+    <div class="control-row">
+      <label>Prese 3 <span class="value" id="cycleVal3">7.2 s</span></label>
+      <input type="range" id="cycleSlider3" min="1.8" max="7.2" step="0.1" value="7.2">
+    </div>
+    <div class="control-row">
+      <label>Prese 4 <span class="value" id="cycleVal4">7.2 s</span></label>
+      <input type="range" id="cycleSlider4" min="1.8" max="7.2" step="0.1" value="7.2">
+    </div>
+
+    <h2>Statistika</h2>
+
+    <div class="stat">
+      <span class="label">Brikešu kopskaits</span>
+      <span class="val" id="statCount">0</span>
+    </div>
+    <div class="stat">
+      <span class="label">Plūsma (br/h)</span>
+      <span class="val" id="statRate">0</span>
+    </div>
+    <div class="stat">
+      <span class="label">Pakas</span>
+      <span class="val" id="statPacks">0</span>
+    </div>
+  </aside>
+</main>
+
+<script>
+// ============================================================
+// CONFIG
+// ============================================================
+const ROOM = { width: 1400, height: 700 };
+
+const PRESSES = [
+  { x:  280, y: 120, rotation: -20 * Math.PI / 180 },
+  { x:  560, y: 100, rotation: 0 },
+  { x:  850, y: 100, rotation: 0 },
+  { x: 1280, y: 200, rotation: Math.PI / 2 }
+];
+
+// Trīs segmenti, visi pie y=280, plūsma pa kreisi
+const CONVEYORS = [
+  { x1:  150, x2:  560, y: 280 },
+  { x1:  560, x2:  850, y: 280 },
+  { x1:  850, x2: 1350, y: 280 }
+];
+
+const TURNING  = { cx: 150, cy: 280, radius: 120 };
+const GROUPING = { x: 20,  y: 310, w: 80, h: 180 };
+const PACKING  = { x: 115, y: 340, w: 50, h: 120 };
+
+const BRIQ_W            = 30;
+const BRIQ_H            = 20;
+const CONVEYOR_H        = 50;
+const CHAIN_OFFSET      = 10;
+const CHAIN_SPEED_PX_S  = 60;
+const PNEUM_STROKE_TIME = 0.4;
+
+// ============================================================
+// BRIQUETTE
+// ============================================================
+class Briquette {
+  constructor(x, y, chainIdx = 0) {
+    this.x        = x;
+    this.y        = y;
+    this.chainIdx = chainIdx;
+    this.vx       = -CHAIN_SPEED_PX_S;
+    this.alive    = true;
+  }
+
+  update(dt) {
+    this.x += this.vx * dt;
+    if (this.x < CONVEYORS[0].x1 - BRIQ_W) this.alive = false;
+  }
+
+  draw(ctx) {
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.fillStyle = '#b8845c';
+    ctx.fillRect(-BRIQ_W/2, -BRIQ_H/2, BRIQ_W, BRIQ_H);
+    ctx.strokeStyle = '#7a5638';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(-BRIQ_W/2, -BRIQ_H/2, BRIQ_W, BRIQ_H);
+    ctx.strokeStyle = 'rgba(122, 86, 56, 0.5)';
+    ctx.lineWidth = 0.8;
+    for (let i = -BRIQ_W/2 + 4; i < BRIQ_W/2; i += 4) {
+      ctx.beginPath();
+      ctx.moveTo(i, -BRIQ_H/2 + 2);
+      ctx.lineTo(i, BRIQ_H/2 - 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+}
+
+// ============================================================
+// PRESS
+// ============================================================
+const PRESS_W = 200;
+const PRESS_H = 130;
+
+class Press {
+  constructor(id, x, y, dropX, conveyorY, rotation = 0) {
+    this.id            = id;
+    this.x             = x;
+    this.y             = y;
+    this.dropX         = dropX;
+    this.conveyorY     = conveyorY;
+    this.rotation      = rotation;
+    this.cycleTime     = 7.2;
+    this.timer         = Math.random() * 7.2;
+    this.outputCounter = 0;
+    this.activeStrokeT = 0;
+  }
+
+  update(dt) {
+    this.timer += dt;
+    if (this.activeStrokeT > 0) this.activeStrokeT -= dt;
+    if (this.timer >= this.cycleTime) {
+      this.timer -= this.cycleTime;
+      this.activeStrokeT = 0.4;
+      const chainIdx = this.outputCounter % 2;
+      this.outputCounter++;
+      return chainIdx;
+    }
+    return null;
+  }
+
+  draw(ctx) {
+    const pw = PRESS_W, ph = PRESS_H;
+    const isVert   = Math.abs(Math.abs(this.rotation) - Math.PI / 2) < 0.15;
+    const halfH    = isVert ? pw / 2 : ph / 2;
+    const chuteTop = this.y + halfH;
+    const chuteEnd = this.conveyorY - CONVEYOR_H / 2 - 1;
+
+    if (chuteTop < chuteEnd) {
+      ctx.save();
+      ctx.fillStyle = '#20232c';
+      ctx.fillRect(this.dropX - BRIQ_H/2 - 3, chuteTop, BRIQ_H + 6, chuteEnd - chuteTop);
+      ctx.strokeStyle = '#4a5260';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(this.dropX - BRIQ_H/2 - 3, chuteTop);
+      ctx.lineTo(this.dropX - BRIQ_H/2 - 3, chuteEnd);
+      ctx.moveTo(this.dropX + BRIQ_H/2 + 3, chuteTop);
+      ctx.lineTo(this.dropX + BRIQ_H/2 + 3, chuteEnd);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.rotate(this.rotation);
+
+    ctx.fillStyle = '#4a5260';
+    ctx.fillRect(-pw/2, -ph/2, pw, ph);
+    ctx.strokeStyle = '#2d3240';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(-pw/2, -ph/2, pw, ph);
+
+    ctx.fillStyle = '#3d4250';
+    ctx.fillRect(-pw/2 + 8, -ph/2 + 8, 28, ph - 16);
+    ctx.fillRect( pw/2 - 36, -ph/2 + 8, 28, ph - 16);
+
+    ctx.fillStyle = '#363c48';
+    ctx.fillRect(-22, -ph/2 + 6, 44, ph - 12);
+    ctx.strokeStyle = '#2a3040';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(-22, -ph/2 + 6, 44, ph - 12);
+
+    if (this.activeStrokeT > 0) {
+      ctx.fillStyle = '#ff8c42';
+      ctx.globalAlpha = Math.min(this.activeStrokeT * 2.5, 1);
+      ctx.fillRect(-22, -ph/2 + 6, 44, ph - 12);
+      ctx.globalAlpha = 1;
+    }
+
+    ctx.fillStyle = '#8b92a3';
+    ctx.font = '11px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('RUF', 0, 5);
+    ctx.restore();
+
+    const bodyTopY = this.y - halfH;
+    ctx.fillStyle = '#e0e3eb';
+    ctx.font = 'bold 10px monospace';
+    ctx.textAlign = 'center';
+    if (bodyTopY > 10) {
+      ctx.fillText(`PRESE ${this.id}`, this.x, bodyTopY - 6);
+    } else {
+      ctx.fillText(`PRESE ${this.id}`, this.x, this.y + 5);
+    }
+  }
+}
+
+// ============================================================
+// FEEDER MODULE
+// ============================================================
+class FeederModule {
+  constructor(x, y) {
+    this.x         = x;
+    this.y         = y;
+    this.strokeT   = 0;
+    this.target    = 0;
+    this.lastChain = null;
+  }
+
+  trigger(chainIdx) {
+    this.lastChain = chainIdx;
+    this.target    = chainIdx === 0 ? 1 : 0;
+  }
+
+  update(dt) {
+    const dir  = this.target - this.strokeT;
+    const step = (dt / PNEUM_STROKE_TIME) * Math.sign(dir);
+    if (Math.abs(dir) > Math.abs(step)) {
+      this.strokeT += step;
+    } else {
+      this.strokeT = this.target;
+    }
+  }
+
+  _ease(t) { return t * t * (3 - 2 * t); }
+
+  draw(ctx) {
+    const visT   = this._ease(this.strokeT);
+    const isNear = visT > 0.5;
+    const cColor = isNear ? '#4a9eff' : '#ff8c42';
+    const w = 28, h = 18;
+
+    ctx.save();
+    ctx.translate(this.x, this.y);
+
+    ctx.fillStyle = '#2d3240';
+    ctx.fillRect(-w/2, -h/2, w, h);
+    ctx.strokeStyle = cColor;
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(-w/2, -h/2, w, h);
+
+    const pistonOffset = (visT - 0.5) * 6;
+    ctx.fillStyle = cColor;
+    ctx.fillRect(-7, -4 - pistonOffset, 14, 8);
+
+    if (this.lastChain !== null) {
+      ctx.fillStyle = cColor;
+      ctx.font = '7px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(isNear ? 'A' : 'B', 0, h/2 + 8);
+    }
+
+    ctx.restore();
+  }
+}
+
+// ============================================================
+// CONVEYOR
+// ============================================================
+const CONV_META = {
+  1: { label: 'KONV. 1', presses: 'P1+P2+P3+P4', rate: '1/1.8 s', color: '#3a5a3a' },
+  2: { label: 'KONV. 2', presses: 'P2+P3+P4',    rate: '1/2.4 s', color: '#3a4a5a' },
+  3: { label: 'KONV. 3', presses: 'P3+P4',        rate: '1/3.6 s', color: '#4a3a5a' },
+};
+
+class Conveyor {
+  constructor(id, x1, x2, y) {
+    this.id         = id;
+    this.x1         = x1;
+    this.x2         = x2;
+    this.y          = y;
+    this.chainPhase = 0;
+  }
+
+  update(dt) {
+    this.chainPhase = (this.chainPhase + dt * CHAIN_SPEED_PX_S) % 20;
+  }
+
+  draw(ctx) {
+    const meta = CONV_META[this.id];
+    const h    = CONVEYOR_H;
+    const yTop = this.y - h / 2;
+    const yMid = this.y;
+    const yBot = this.y + h / 2;
+    const w    = this.x2 - this.x1;
+
+    ctx.fillStyle = meta.color;
+    ctx.fillRect(this.x1, yTop, w, h);
+    ctx.fillStyle = '#2a2e38';
+    ctx.globalAlpha = 0.55;
+    ctx.fillRect(this.x1, yTop, w, h);
+    ctx.globalAlpha = 1;
+
+    ctx.strokeStyle = '#4a5260';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(this.x1, yTop, w, h);
+
+    ctx.strokeStyle = '#5a6270';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(this.x1, yTop + 3); ctx.lineTo(this.x2, yTop + 3);
+    ctx.moveTo(this.x1, yBot - 3); ctx.lineTo(this.x2, yBot - 3);
+    ctx.stroke();
+
+    ctx.strokeStyle = '#3d4250';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(this.x1, yMid); ctx.lineTo(this.x2, yMid);
+    ctx.stroke();
+
+    const offset = (20 - this.chainPhase) % 20;
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = '#525c6a';
+    for (let x = this.x1 + offset; x < this.x2; x += 20) {
+      ctx.beginPath();
+      ctx.moveTo(x, yTop + 3); ctx.lineTo(x, yMid - 1);
+      ctx.stroke();
+    }
+    ctx.strokeStyle = '#4a5462';
+    for (let x = this.x1 + offset; x < this.x2; x += 20) {
+      ctx.beginPath();
+      ctx.moveTo(x, yMid + 1); ctx.lineTo(x, yBot - 3);
+      ctx.stroke();
+    }
+
+    ctx.font = '8px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#4a9eff';
+    ctx.fillText('A', this.x1 + 4, yMid - 4);
+    ctx.fillStyle = '#ff8c42';
+    ctx.fillText('B', this.x1 + 4, yMid + 11);
+
+    const cx = this.x1 + w / 2;
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 10px monospace';
+    ctx.fillStyle = '#8b92a3';
+    ctx.fillText(`← ${meta.label}`, cx, yTop - 14);
+    ctx.font = '9px monospace';
+    ctx.fillStyle = '#5a6170';
+    ctx.fillText(`${meta.presses}  ·  ${meta.rate}`, cx, yTop - 4);
+  }
+}
+
+// ============================================================
+// TURNING CONVEYOR
+// ============================================================
+class TurningConveyor {
+  constructor(cx, cy, r) {
+    this.cx            = cx;
+    this.cy            = cy;
+    this.r             = r;
+    this.arcBriquettes = [];
+    this.chainPhase    = 0;
+  }
+
+  receive(b) {
+    this.arcBriquettes.push({ t: 0, chainIdx: b.chainIdx });
+  }
+
+  update(dt) {
+    const speed = CHAIN_SPEED_PX_S / (this.r * Math.PI / 2);
+    this.chainPhase = (this.chainPhase + dt * CHAIN_SPEED_PX_S) % 20;
+    this.arcBriquettes.forEach(b => { b.t += speed * dt; });
+    this.arcBriquettes = this.arcBriquettes.filter(b => b.t < 1);
+  }
+
+  _pos(t, chainIdx) {
+    const rEff  = this.r + (chainIdx === 0 ? CHAIN_OFFSET : -CHAIN_OFFSET);
+    const theta = 3 * Math.PI / 2 - t * Math.PI / 2;
+    return {
+      x:     this.cx + rEff * Math.cos(theta),
+      y:     this.cy + rEff * Math.sin(theta),
+      angle: theta - Math.PI / 2,
+    };
+  }
+
+  draw(ctx) {
+    const trackW = CONVEYOR_H + 2 * CHAIN_OFFSET + 4;
+    const rIn    = this.r - trackW / 2;
+    const rOut   = this.r + trackW / 2;
+    const rA     = this.r + CHAIN_OFFSET;
+    const rB     = this.r - CHAIN_OFFSET;
+
+    const startAngle = Math.PI;
+    const endAngle   = 3 * Math.PI / 2;
+
+    ctx.beginPath();
+    ctx.arc(this.cx, this.cy, this.r, startAngle, endAngle, false);
+    ctx.strokeStyle = '#2a2e38';
+    ctx.lineWidth   = trackW;
+    ctx.stroke();
+
+    [rOut - 2, rIn + 2].forEach(r => {
+      ctx.beginPath();
+      ctx.arc(this.cx, this.cy, r, startAngle, endAngle, false);
+      ctx.strokeStyle = '#4a5260';
+      ctx.lineWidth   = 3;
+      ctx.stroke();
+    });
+
+    ctx.beginPath();
+    ctx.arc(this.cx, this.cy, this.r, startAngle, endAngle, false);
+    ctx.strokeStyle = '#3d4250';
+    ctx.lineWidth   = 1;
+    ctx.stroke();
+
+    const arcLen = this.r * Math.PI / 2;
+    const offset = (20 - this.chainPhase % 20) % 20;
+    ctx.strokeStyle = '#525c6a';
+    ctx.lineWidth   = 1;
+    for (let d = offset; d < arcLen; d += 20) {
+      const theta = 3 * Math.PI / 2 - (d / arcLen) * Math.PI / 2;
+      const cos   = Math.cos(theta), sin = Math.sin(theta);
+      ctx.beginPath();
+      ctx.moveTo(this.cx + (rIn + 4) * cos, this.cy + (rIn + 4) * sin);
+      ctx.lineTo(this.cx + (rOut - 4) * cos, this.cy + (rOut - 4) * sin);
+      ctx.stroke();
+    }
+
+    const thetaMid = 3 * Math.PI / 2 - 0.5 * Math.PI / 2;
+    const cosMid   = Math.cos(thetaMid), sinMid = Math.sin(thetaMid);
+    ctx.font = '8px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#4a9eff';
+    ctx.fillText('A', this.cx + (rA + 10) * cosMid, this.cy + (rA + 10) * sinMid + 3);
+    ctx.fillStyle = '#ff8c42';
+    ctx.fillText('B', this.cx + (rB - 10) * cosMid, this.cy + (rB - 10) * sinMid + 3);
+
+    ctx.fillStyle = '#5a6170';
+    ctx.font = 'bold 9px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('KONV. 0', this.cx - this.r * 0.55, this.cy + this.r * 0.55 + 12);
+    ctx.font = '8px monospace';
+    ctx.fillStyle = '#3d4250';
+    ctx.fillText('90°', this.cx - this.r * 0.55, this.cy + this.r * 0.55 + 23);
+
+    this.arcBriquettes.forEach(({ t, chainIdx }) => {
+      const { x, y, angle } = this._pos(t, chainIdx);
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(angle);
+      ctx.fillStyle = '#b8845c';
+      ctx.fillRect(-BRIQ_W/2, -BRIQ_H/2, BRIQ_W, BRIQ_H);
+      ctx.strokeStyle = '#7a5638';
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(-BRIQ_W/2, -BRIQ_H/2, BRIQ_W, BRIQ_H);
+      ctx.strokeStyle = 'rgba(122,86,56,0.5)';
+      ctx.lineWidth = 0.8;
+      for (let i = -BRIQ_W/2 + 4; i < BRIQ_W/2; i += 4) {
+        ctx.beginPath();
+        ctx.moveTo(i, -BRIQ_H/2 + 2);
+        ctx.lineTo(i, BRIQ_H/2 - 2);
+        ctx.stroke();
+      }
+      ctx.restore();
+    });
+  }
+}
+
+// ============================================================
+// UI
+// ============================================================
+const statCount = document.getElementById('statCount');
+const statRate  = document.getElementById('statRate');
+const statPacks = document.getElementById('statPacks');
+
+const pressSliders = [1, 2, 3, 4].map(i => ({
+  slider: document.getElementById(`cycleSlider${i}`),
+  val:    document.getElementById(`cycleVal${i}`)
+}));
+
+function updateStats(totalCount, rateBuffer, now, packCount) {
+  statCount.textContent = totalCount;
+  const cutoff = now - 10000;
+  while (rateBuffer.length && rateBuffer[0] < cutoff) rateBuffer.shift();
+  statRate.textContent  = Math.round(rateBuffer.length * 360);
+  statPacks.textContent = packCount;
+}
+
+// ============================================================
+// MAIN
+// ============================================================
+const canvas = document.getElementById('stage');
+const ctx    = canvas.getContext('2d');
+canvas.width  = ROOM.width;
+canvas.height = ROOM.height;
+
+const CONVEYOR_Y = 280;
+
+const presses = PRESSES.map((p, i) =>
+  new Press(i + 1, p.x, p.y, p.x, CONVEYOR_Y, p.rotation)
+);
+
+const feeders = presses.map(p =>
+  new FeederModule(p.dropX, CONVEYOR_Y - CONVEYOR_H / 2 - 12)
+);
+
+const conveyors = CONVEYORS.map((c, i) =>
+  new Conveyor(i + 1, c.x1, c.x2, c.y)
+);
+
+// cy = TURNING.cy + radius — loks centrēts zem konveijera
+const turningConv = new TurningConveyor(TURNING.cx, TURNING.cy + TURNING.radius, TURNING.radius);
+
+const briquettes = [];
+let totalCount = 0;
+let packCount  = 0;
+const rateBuffer = [];
+
+pressSliders.forEach((s, i) => {
+  s.slider.addEventListener('input', e => {
+    presses[i].cycleTime = parseFloat(e.target.value);
+    s.val.textContent = presses[i].cycleTime.toFixed(1) + ' s';
+  });
+});
+
+function drawGroupingUnit(ctx) {
+  const { x, y, w, h } = GROUPING;
+  ctx.fillStyle = 'rgba(0,200,200,0.08)';
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = '#00c8c8';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x, y, w, h);
+  ctx.fillStyle = '#00c8c8';
+  ctx.font = 'bold 9px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('GRUPĒŠ.',  x + w/2, y + h/2 - 10);
+  ctx.fillText('MEZGLS',   x + w/2, y + h/2 + 2);
+  ctx.font = '8px monospace';
+  ctx.fillText('6 × 2',    x + w/2, y + h/2 + 16);
+}
+
+function drawFilmWrapper(ctx) {
+  const { x, y, w, h } = PACKING;
+  ctx.fillStyle = 'rgba(74,158,255,0.1)';
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = '#4a9eff';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x, y, w, h);
+  ctx.fillStyle = '#4a9eff';
+  ctx.font = 'bold 8px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('PLĒV.', x + w/2, y + h/2 - 5);
+  ctx.font = '7px monospace';
+  ctx.fillText('wrap',  x + w/2, y + h/2 + 7);
+}
+
+let lastT = performance.now();
+
+function loop(now) {
+  const dt = Math.min((now - lastT) / 1000, 0.05);
+  lastT = now;
+
+  presses.forEach((p, i) => {
+    const chainIdx = p.update(dt);
+    if (chainIdx !== null) {
+      feeders[i].trigger(chainIdx);
+      const conv    = conveyors[Math.min(i, conveyors.length - 1)];
+      const targetY = chainIdx === 0
+        ? conv.y - CHAIN_OFFSET
+        : conv.y + CHAIN_OFFSET;
+      briquettes.push(new Briquette(p.dropX, targetY, chainIdx));
+      totalCount++;
+      rateBuffer.push(now);
+    }
+    feeders[i].update(dt);
+  });
+
+  conveyors.forEach(c => c.update(dt));
+  turningConv.update(dt);
+  briquettes.forEach(b => b.update(dt));
+
+  for (let i = briquettes.length - 1; i >= 0; i--) {
+    const b = briquettes[i];
+    if (b.x < TURNING.cx) {
+      turningConv.receive(b);
+      briquettes.splice(i, 1);
+    } else if (!b.alive) {
+      briquettes.splice(i, 1);
+    }
+  }
+
+  ctx.fillStyle = '#1a1d24';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  drawGroupingUnit(ctx);
+  drawFilmWrapper(ctx);
+  conveyors.forEach(c => c.draw(ctx));
+  turningConv.draw(ctx);
+  presses.forEach(p => p.draw(ctx));
+  feeders.forEach(f => f.draw(ctx));
+  briquettes.forEach(b => b.draw(ctx));
+
+  updateStats(totalCount, rateBuffer, now, packCount);
+
+  requestAnimationFrame(loop);
+}
+
+requestAnimationFrame(loop);
+</script>
+
+</body>
+</html>

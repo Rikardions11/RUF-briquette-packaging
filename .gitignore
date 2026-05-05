@@ -1,0 +1,23 @@
+# Operētājsistēmas faili
+.DS_Store
+Thumbs.db
+
+# Redaktoru direktoriji
+.vscode/
+.idea/
+*.swp
+*~
+
+# Logs
+*.log
+
+# Node atkarības (ja vēlāk pievienosim build steku)
+node_modules/
+
+# Build izvades
+dist/
+build/
+
+# Vides mainīgie
+.env
+.env.local
