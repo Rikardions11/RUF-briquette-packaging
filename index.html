@@ -80,7 +80,7 @@ const PACKING  = { x: 115, y: 340, w: 50, h: 120 };
 
 const BRIQ_W            = 30;
 const BRIQ_H            = 20;
-const CONVEYOR_H        = 30;
+const CONVEYOR_H        = 40;
 const CHAIN_OFFSET      = 10;
 const CHAIN_SPEED_PX_S  = 60;
 const PNEUM_STROKE_TIME = 0.4;
@@ -140,6 +140,7 @@ class Press {
     this.timer         = Math.random() * 7.2;
     this.outputCounter = 0;
     this.activeStrokeT = 0;
+    this.lastChainIdx  = 0;
   }
 
   update(dt) {
@@ -150,6 +151,7 @@ class Press {
       this.activeStrokeT = 0.4;
       const chainIdx = this.outputCounter % 2;
       this.outputCounter++;
+      this.lastChainIdx = chainIdx;
       return chainIdx;
     }
     return null;
@@ -162,39 +164,32 @@ class Press {
     const chuteTop = this.y + halfH;
     const chuteEnd = this.conveyorY - CONVEYOR_H / 2 - 1;
 
-    if (chuteTop < chuteEnd) {
-      // Kanāls lejup — prese virs konveijera
-      ctx.save();
-      ctx.fillStyle = '#20232c';
-      ctx.fillRect(this.dropX - BRIQ_H/2 - 3, chuteTop, BRIQ_H + 6, chuteEnd - chuteTop);
-      ctx.strokeStyle = '#4a5260';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(this.dropX - BRIQ_H/2 - 3, chuteTop);
-      ctx.lineTo(this.dropX - BRIQ_H/2 - 3, chuteEnd);
-      ctx.moveTo(this.dropX + BRIQ_H/2 + 3, chuteTop);
-      ctx.lineTo(this.dropX + BRIQ_H/2 + 3, chuteEnd);
-      ctx.stroke();
-      ctx.restore();
-    } else {
-      // Kanāls augšup — prese zem konveijera
-      const chuteFrom = this.y - halfH;
-      const chuteTo   = this.conveyorY + CONVEYOR_H / 2 + 1;
-      if (chuteFrom > chuteTo) {
+    // Divi kanāli — viens uz ķēdi A, otrs uz ķēdi B
+    const aboveConv  = this.y < this.conveyorY;
+    const exitY      = aboveConv
+      ? this.conveyorY - CONVEYOR_H / 2 - 10
+      : this.conveyorY + CONVEYOR_H / 2 + 2;
+    const eW         = BRIQ_W;
+    const channelOffsets = [-(eW / 2 + 2), eW / 2 + 2];
+    const channelColors  = ['#4a9eff', '#ff8c42'];
+
+    channelOffsets.forEach((ox, idx) => {
+      const cx    = this.dropX + ox;
+      const x1    = cx - eW / 2;
+      const yFrom = aboveConv ? chuteTop : this.y - halfH;
+      const yTo   = aboveConv ? exitY    : exitY + 12;
+      if ((aboveConv && yFrom < yTo) || (!aboveConv && yFrom > yTo)) {
         ctx.save();
         ctx.fillStyle = '#20232c';
-        ctx.fillRect(this.dropX - BRIQ_H/2 - 3, chuteTo, BRIQ_H + 6, chuteFrom - chuteTo);
-        ctx.strokeStyle = '#4a5260';
+        const yTop = Math.min(yFrom, yTo);
+        const yBot = Math.max(yFrom, yTo);
+        ctx.fillRect(x1, yTop, eW, yBot - yTop);
+        ctx.strokeStyle = channelColors[idx];
         ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(this.dropX - BRIQ_H/2 - 3, chuteTo);
-        ctx.lineTo(this.dropX - BRIQ_H/2 - 3, chuteFrom);
-        ctx.moveTo(this.dropX + BRIQ_H/2 + 3, chuteTo);
-        ctx.lineTo(this.dropX + BRIQ_H/2 + 3, chuteFrom);
-        ctx.stroke();
+        ctx.strokeRect(x1, yTop, eW, yBot - yTop);
         ctx.restore();
       }
-    }
+    });
 
     ctx.save();
     ctx.translate(this.x, this.y);
@@ -230,14 +225,62 @@ class Press {
     ctx.restore();
 
     const bodyTopY = this.y - halfH;
+    ctx.textAlign = 'center';
+
+    // Preses etiķete
     ctx.fillStyle = '#e0e3eb';
     ctx.font = 'bold 10px monospace';
-    ctx.textAlign = 'center';
     if (bodyTopY > 10) {
-      ctx.fillText(`PRESE ${this.id}`, this.x, bodyTopY - 6);
+      ctx.fillText(`PRESE ${this.id}`, this.x, bodyTopY - 16);
     } else {
       ctx.fillText(`PRESE ${this.id}`, this.x, this.y + 5);
     }
+
+    // Atlikušā laika taimeris
+    const remaining = Math.max(0, this.cycleTime - this.timer);
+    const progress  = 1 - remaining / this.cycleTime;
+
+    // Josla preses lokālajā telpā — vertikāla, paralēla preses malām
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.rotate(this.rotation);
+
+    const bW = 16, bH = ph - 24;
+    ctx.fillStyle = '#1a1d24';
+    ctx.fillRect(-bW / 2, -bH / 2, bW, bH);
+    const fillH = bH * progress;
+    ctx.fillStyle = progress > 0.85 ? '#ff8c42' : '#5fb878';
+    ctx.fillRect(-bW / 2, bH / 2 - fillH, bW, fillH);
+    ctx.strokeStyle = '#4a5260';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(-bW / 2, -bH / 2, bW, bH);
+
+    ctx.fillStyle = '#e0e3eb';
+    ctx.font = '8px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(remaining.toFixed(1) + 's', 0, -bH / 2 - 3);
+
+    ctx.restore();
+
+    // Divas izejas pie konveijera — A un B ķēde
+    const eH = 12;
+    const offsets = channelOffsets;
+    const labels  = ['A', 'B'];
+    const colors  = ['#4a9eff', '#ff8c42'];
+
+    offsets.forEach((ox, idx) => {
+      const ex = this.dropX + ox - eW / 2;
+      const active = this.lastChainIdx === idx && this.activeStrokeT > 0;
+      ctx.fillStyle = active ? colors[idx] : '#1a1d24';
+      ctx.fillRect(ex, exitY, eW, eH);
+      ctx.strokeStyle = colors[idx];
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(ex, exitY, eW, eH);
+      ctx.fillStyle = active ? '#fff' : colors[idx];
+      ctx.font = 'bold 8px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(labels[idx], this.dropX + ox, exitY + eH - 2);
+    });
   }
 }
 
@@ -537,14 +580,6 @@ const presses = PRESSES.map((p, i) =>
   new Press(i + 1, p.x, p.y, p.x, CONVEYOR_Y, p.rotation)
 );
 
-const feeders = presses.map(p =>
-  new FeederModule(
-    p.dropX,
-    p.y < CONVEYOR_Y
-      ? CONVEYOR_Y - CONVEYOR_H / 2 - 12   // virs konveijera
-      : CONVEYOR_Y + CONVEYOR_H / 2 + 12   // zem konveijera (Prese 4)
-  )
-);
 
 const conveyors = CONVEYORS.map((c, i) =>
   new Conveyor(i + 1, c.x1, c.x2, c.y)
@@ -651,7 +686,6 @@ function loop(now) {
   presses.forEach((p, i) => {
     const chainIdx = p.update(dt);
     if (chainIdx !== null) {
-      feeders[i].trigger(chainIdx);
       const conv    = conveyors[Math.min(i, conveyors.length - 1)];
       const targetY = chainIdx === 0
         ? conv.y - CHAIN_OFFSET
@@ -660,7 +694,6 @@ function loop(now) {
       totalCount++;
       rateBuffer.push(now);
     }
-    feeders[i].update(dt);
   });
 
   conveyors.forEach(c => c.update(dt));
@@ -686,7 +719,6 @@ function loop(now) {
   conveyors.forEach(c => c.draw(ctx));
   turningConv.draw(ctx);
   presses.forEach(p => p.draw(ctx));
-  feeders.forEach(f => f.draw(ctx));
   briquettes.forEach(b => b.draw(ctx));
 
   updateStats(totalCount, rateBuffer, now, packCount);
