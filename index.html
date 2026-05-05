@@ -74,8 +74,8 @@ const CONVEYORS = [
   { x1: 1030, x2: 1380, y: 280 }
 ];
 
-const TURNING  = { cx: 150, cy: 280, radius: 120 };
-const GROUPING = { x: 20,  y: 310, w: 80, h: 180 };
+const TURNING  = { cx: 200, cy: 280, radius: 120 };
+const GROUPING = { x: 60,  y: 427, w: 80, h: 180 };
 const PACKING  = { x: 115, y: 340, w: 50, h: 120 };
 
 const BRIQ_W            = 30;
@@ -600,6 +600,54 @@ pressSliders.forEach((s, i) => {
   });
 });
 
+function drawTurningExitExtension(ctx) {
+  const xMid = TURNING.cx - TURNING.radius;  // loka izeja x (centrs)
+  const yTop = TURNING.cy + TURNING.radius;  // loka izeja y
+  const yBot = GROUPING.y;
+  const h    = CONVEYOR_H;
+  const xL   = xMid - h / 2;
+  const xR   = xMid + h / 2;
+  const phase = conveyors[0].chainPhase;
+
+  ctx.fillStyle = '#2a2e38';
+  ctx.fillRect(xL, yTop, h, yBot - yTop);
+
+  ctx.strokeStyle = '#4a5260';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(xL, yTop, h, yBot - yTop);
+
+  // Sānu sliedes
+  ctx.strokeStyle = '#5a6270';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(xL + 3, yTop); ctx.lineTo(xL + 3, yBot);
+  ctx.moveTo(xR - 3, yTop); ctx.lineTo(xR - 3, yBot);
+  ctx.stroke();
+
+  // Centrālā dalījuma līnija
+  ctx.strokeStyle = '#3d4250';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(xMid, yTop); ctx.lineTo(xMid, yBot);
+  ctx.stroke();
+
+  // Ķēdes zobi — divi slāņi (kreisais un labais)
+  const offset = phase % 20;
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = '#525c6a';
+  for (let y = yTop + offset; y < yBot; y += 20) {
+    ctx.beginPath();
+    ctx.moveTo(xL + 3, y); ctx.lineTo(xMid - 1, y);
+    ctx.stroke();
+  }
+  ctx.strokeStyle = '#4a5462';
+  for (let y = yTop + offset; y < yBot; y += 20) {
+    ctx.beginPath();
+    ctx.moveTo(xMid + 1, y); ctx.lineTo(xR - 3, y);
+    ctx.stroke();
+  }
+}
+
 function drawTurningExtension(ctx) {
   const x1   = TURNING.cx;
   const x2   = CONVEYORS[0].x1;
@@ -715,6 +763,7 @@ function loop(now) {
 
   drawGroupingUnit(ctx);
   drawFilmWrapper(ctx);
+  drawTurningExitExtension(ctx);
   drawTurningExtension(ctx);
   conveyors.forEach(c => c.draw(ctx));
   turningConv.draw(ctx);
